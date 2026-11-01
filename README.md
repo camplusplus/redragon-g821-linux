@@ -17,6 +17,7 @@ Document and test the G821 mode that exposes analog trigger values to Linux. The
 - Holding Home for 3 seconds selects another mode, observed as USB ID `2564:0578`, product name `Gamepad`.
 - The user reports that powering on with the dongle by pressing Home also selects `2564:0578`; its triggers are digital in evdev. The manual's claim that normal PC dongle startup enters X-input is not confirmed on this unit.
 - Holding Start + Select while the controller is on changes the dongle's USB identity to `4c4a:2342 BR23UBOOT1.00`.
+- In Windows XP, the controller immediately came up with only the bottom-left Home-ring LED lit. Device Manager reports `HID\VID_20BC&PID_5001`; public search results associate USB ID `20BC:5001` with a ShanWan gamepad, but its trigger behavior has not yet been tested.
 - With the dongle removed and USB cable connected, holding D-pad Up and pressing Home selects USB ID `05ac:033e`, reported as `Apple, Inc. Gamepad`.
 - The different IDs were observed with the gamepad off (`2563:0575`) and powered on in keyboard mode (`0283:0001`). A live kernel log of the transition has not yet been captured, so the exact disconnect/reconnect sequence remains unverified.
 
@@ -59,9 +60,51 @@ The gamepad interface has standard axes and extra 16-bit values, but the descrip
 
 An `evtest` test in this mode showed the left trigger as `EV_KEY` `BTN_TL` (code 310) and the right trigger as `EV_KEY` `BTN_TR` (code 311), each emitting only press (`1`) and release (`0`) events. Linux therefore exposes both triggers as digital buttons in this mode; the supplied trace contains no analog trigger `EV_ABS` events.
 
+## Windows XP Mode (`HID\VID_20BC&PID_5001`)
+
+On Windows XP, the controller immediately started with only the bottom-left ring LED lit. Device Manager showed hardware ID `HID\VID_20BC&PID_5001`. The added `USBLog2.usblog` capture confirms USB ID `20bc:5001` and contains the same 191-byte Game Pad HID report descriptor as the wired Apple-identified profile. It declares `Brake` and `Accelerator` as 8-bit Simulation Controls with logical range 0-255, alongside buttons, a hat, and stick axes. Thus this XP-selected profile is analog-trigger-capable even though XP's game-controller panel does not show trigger sliders. The capture shows ordinary enumeration/HID setup, including `SET_IDLE`, but no standard HID `SET_REPORT` request that could be identified as a mode-switch command. The trace does not appear to include a deliberate button-triggered mode change or a controlled trigger sweep, so actual changing trigger samples are not established by this log alone.
+
+The capture therefore does not provide a reusable "magic string" for udev. The mode appears to be selected by the controller/receiver's startup behavior in this session; the host requests the HID descriptor and configures the interface. A future Linux capture in the same one-LED wireless mode should compare its USB ID and descriptor with `20bc:5001`. If Linux enumerates the same report descriptor, test its axes with `evtest` before attempting a custom driver or udev helper.
+
+### Dongle-Only XP Capture (`USBLog4.usblog`)
+
+This capture was made when the dongle was inserted but the gamepad was not powered on. `capture.txt` shows USB device ID `20bc:5001`, two HID report-descriptor requests (Game Pad report ID `0x01` and keyboard report ID `0x03`), and repeated neutral IN reports. The raw Game Pad descriptor is byte-for-byte the same 191-byte descriptor as the wired `05ac:033e` profile, including `Brake` and `Accelerator` inputs with range 0-255. Therefore, the dongle advertises an analog-trigger-capable Game Pad interface even before the controller is on.
+
+This is descriptor capability, not proof that the wireless controller is sending analog trigger values. The recorded gamepad packets are neutral while the controller is off, and the text summary labels their endpoint `n/a` and shows only 8 data bytes, shorter than the full report described by the descriptor. The capture shows no payload-bearing `SET_REPORT`/interrupt-OUT mode command during dongle insertion; the class-interface OUT operations have no data payload. A new capture with the controller powered on and each trigger swept is needed to verify wireless values and map the report bytes.
+
+### Powered-On XP Capture (`USBLog11.usblog`)
+
+`capture2.txt` shows the same `20bc:5001` device and HID setup, followed by 8-byte input reports with report ID `0x01`. The payload changes from `01 00 00 0f 80 7f 80 7f` to `01 00 01 0f 80 7f 80 7f`, then `01 00 02 0f 80 7f 80 7f`; the final four axis bytes remain fixed. Given the descriptor's 15-button field, the changing bytes are consistent with button bits changing, while no varying `Brake`/`Accelerator` values appear in the captured data.
+
+There is a report-length discrepancy: the descriptor implies 10 bytes including report ID `0x01` (two button bytes, hat, four axes, and two trigger bytes), while each captured input packet is only 8 bytes. This may indicate that the XP-mode firmware sends a shorter report without the analog trigger values, or that this capture tool/path truncates reports. The log therefore does not confirm analog triggers in the wireless XP profile; the observed input appears button-only in the changed fields, with the trigger axes absent from the captured packet. It also contains no standard HID `SET_REPORT` mode-selection request, so there is still no command payload to replay through udev.
+
 ## Dongle Bootloader (`4c4a:2342`)
 
 Holding Start + Select while the controller is on makes the dongle enumerate as `4c4a:2342 BR23UBOOT1.00`. This is a bootloader/update identity, not a gamepad input mode and not a way to enable analog triggers. No G821-specific bootloader exit or recovery procedure has been verified. Do not flash firmware or send guessed USB commands; first try disconnecting the dongle and reconnecting it without holding Start + Select, then check whether its normal USB identity returns. If it remains in bootloader mode, obtain the correct G821 firmware/recovery instructions from Redragon support before proceeding.
+
+## Capturing a Windows Mode Request
+
+The unknown command may not be a text "magic string". It could be a HID class `SET_REPORT` control transfer, a feature report, or an interrupt-OUT report. Capture the full USB transaction stream, including enumeration, before the receiver is plugged in. USBPcap is generally used with modern Windows/Wireshark and is not the appropriate assumption for Windows XP; use a USB analyzer explicitly compatible with the XP installation (for example, SnoopyPro or a commercial USB monitor), or a hardware USB protocol analyzer. These older capture drivers are privileged kernel components, so use a trusted source and avoid installing an unverified binary on a machine with important data.
+
+For a physical dongle-add/enumeration capture, leave the dongle plugged in while setting up the analyzer, select the USB host controller/root hub it is connected to, and start capture. Then unplug the dongle, wait briefly, plug it back into the same port, power on the controller, wait for enumeration to finish, and stop/save the capture. The plug event itself is not a USB packet; the useful traffic is the enumeration immediately after reconnection.
+
+For a wireless mode-change capture, keep the dongle plugged in. Start a fresh capture first, then power on the controller or perform the exact button action that changes its LED/profile. Stop/save after the mode settles. Repeat from the same initial state for a normal-start baseline and the target mode, using separate captures. This distinguishes USB hot-plug enumeration from radio/controller mode changes.
+
+Compare host-to-device traffic, especially HID `SET_REPORT`/`GET_REPORT` requests and interrupt-OUT payloads. Record transfer type, interface, report type/ID, length, and bytes. The current `USBLog2.usblog` already includes the device/configuration and HID report descriptors, so it captured at least part of enumeration even if capture did not begin before the physical plug-in; a fresh before/after capture is useful mainly for the exact start sequence and mode-change comparison.
+
+If the traces contain no differing host-to-device report around the mode change, the profile may be selected by controller firmware or by a normal enumeration difference rather than a replayable command. Do not treat an observed bootloader transfer or firmware data as a mode-switch command.
+
+## Linux Replay and udev Automation
+
+First replay a candidate report manually against the correct Linux HID device using a small `hidraw`/`hidapi` test helper while the device is idle. Match the captured report type, report ID, payload length, and interface; verify that it changes the LED/mode and that a power cycle returns the device to a known-good state. Do not make a udev rule until this manual test is repeatable and the exact device to receive the report is known.
+
+Once verified, use udev only to start a short systemd oneshot service; have that service call the tested helper. Template only (replace the IDs with the Linux VID/PID of the device that should receive the report):
+
+```udev
+ACTION=="add", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="vvvv", ATTRS{idProduct}=="pppp", TAG+="systemd", ENV{SYSTEMD_WANTS}+="g821-mode.service"
+```
+
+The helper should locate the matching HID interface by its parent USB IDs and interface number rather than assuming a fixed `/dev/hidrawN`. The mode change may disconnect/re-enumerate the device, so the helper/service should tolerate disappearance and must not loop by matching the new mode as though it were a fresh request. The `vvvv`/`pppp` values and report bytes are intentionally unknown until captured and validated.
 
 ## Wired Apple-Identified Gamepad Mode (`05ac:033e`)
 
@@ -107,8 +150,9 @@ The wired Apple-identified mode selection and failed wireless handoff are confir
 - What exact sequence enters the manual's wireless PC X-input mode on this controller; Home selects digital-trigger `2564:0578`, while dongle-connected Up+Home leaves `0283:0001` in its keyboard/mouse HID profile.
 - How to exit the dongle's `4c4a:2342 BR23UBOOT1.00` bootloader state if a normal power cycle does not restore the receiver.
 - The meanings and valid payloads of the vendor-defined output reports.
+- Whether Windows XP sends a host-to-device report that selects the bottom-left-LED mode.
 
-The tested handoff returns to keyboard mode. It is not yet known whether another wireless PC X-input mode exposes analog trigger axes; the manual's generic X-input startup instructions have not matched the modes observed so far. Further protocol investigation would require capturing and comparing wireless reports or identifying a controller-side mode switch. For the currently identified powered-off receiver, retrieve the descriptor with:
+The tested handoff returns to keyboard mode. It is not yet known whether another wireless PC X-input mode exposes analog trigger axes; the manual's generic X-input startup instructions have not matched the modes observed so far. For the currently identified powered-off receiver, retrieve the descriptor with:
 
 ```sh
 sudo usbhid-dump -d 2563:0575 -e descriptor
