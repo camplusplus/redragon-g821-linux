@@ -1,5 +1,8 @@
 # Redragon Tophis G821 Linux Mode Investigation
 
+## fixed by adding /etc/udev/rules.d/90-xpad-new-id.rules
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0283", ATTRS{idProduct}=="0001", RUN+="/bin/sh -c 'echo 0283 0001 > /sys/bus/usb/drivers/xpad/new_id'"
+
 ## Goal
 
 Document and test the G821 mode that exposes analog trigger values to Linux. The controller has keyboard, digital-trigger gamepad, D-input, and Apple-identified wired HID gamepad modes. The four-quadrant blue ring around the Home button showed the two right LEDs in keyboard mode and the two left LEDs in the D-input mode.
