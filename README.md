@@ -78,6 +78,16 @@ This is descriptor capability, not proof that the wireless controller is sending
 
 There is a report-length discrepancy: the descriptor implies 10 bytes including report ID `0x01` (two button bytes, hat, four axes, and two trigger bytes), while each captured input packet is only 8 bytes. This may indicate that the XP-mode firmware sends a shorter report without the analog trigger values, or that this capture tool/path truncates reports. The log therefore does not confirm analog triggers in the wireless XP profile; the observed input appears button-only in the changed fields, with the trigger axes absent from the captured packet. It also contains no standard HID `SET_REPORT` mode-selection request, so there is still no command payload to replay through udev.
 
+### Simultaneous Interface Captures (`capture3`-`capture5`)
+
+The three captures were recorded at the same time and correspond to the same receiver and revision, split by USB device/interface:
+
+- `capture3/USBLog3.usblog`: composite parent `USB\VID_20BC&PID_5001&REV_0124`, with both Game Pad and keyboard HID interfaces.
+- `capture4/USBLog4.usblog`: Game Pad interface `USB\VID_20BC&PID_5001&REV_0124&MI_00`.
+- `capture5/USBLog5.usblog`: keyboard interface `USB\VID_20BC&PID_5001&REV_0124&MI_01`.
+
+The Game Pad interface records 8-byte input reports. They change from `00 00 00 0f 80 7f 80 7f` to `01 00 00 0f 80 7f 80 7f`; the first report byte changes while the axis-like bytes stay centered. This is consistent with a button state changing, not a gradual trigger sweep. The captured report is again shorter than the 10 bytes implied by the advertised descriptor, so no varying `Brake`/`Accelerator` values appear. The keyboard-interface capture shows no payload-bearing host-to-device mode command. These simultaneous interface-specific traces help attribute traffic to MI_00 versus MI_01, but do not reveal a separate command or prove wireless analog triggers.
+
 ## Dongle Bootloader (`4c4a:2342`)
 
 Holding Start + Select while the controller is on makes the dongle enumerate as `4c4a:2342 BR23UBOOT1.00`. This is a bootloader/update identity, not a gamepad input mode and not a way to enable analog triggers. No G821-specific bootloader exit or recovery procedure has been verified. Do not flash firmware or send guessed USB commands; first try disconnecting the dongle and reconnecting it without holding Start + Select, then check whether its normal USB identity returns. If it remains in bootloader mode, obtain the correct G821 firmware/recovery instructions from Redragon support before proceeding.
